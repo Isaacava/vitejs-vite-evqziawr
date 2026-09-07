@@ -70,8 +70,9 @@ export function erc8004RegistrationDocument(input: {
   name: string;
   description: string;
   image?: string;
-  services: Array<{ name: string; endpoint: string; version?: string }>;
+  services: Array<{ name: string; endpoint: string; version?: string; metadata?: Record<string, unknown> }>;
   agentId?: string | null;
+  capabilities?: Array<Record<string, unknown>>;
 }) {
   return {
     type: "https://eips.ethereum.org/EIPS/eip-8004#registration-v1",
@@ -79,6 +80,7 @@ export function erc8004RegistrationDocument(input: {
     description: input.description,
     image: input.image || "",
     services: input.services,
+    capabilities: input.capabilities || [],
     x402Support: false,
     active: true,
     registrations: input.agentId ? [{ agentId: Number(input.agentId), agentRegistry: `eip155:97:${IDENTITY_REGISTRY}` }] : [],
