@@ -12,7 +12,7 @@ const app = express();
 app.use(cors());
 app.use(express.json({ limit: "2mb" }));
 const port = Number(process.env.PORT || 8788);
-const baseUrl = process.env.BASE_URL || `http://localhost:${port}`;
+const baseUrl = (process.env.BASE_URL || `http://localhost:${port}`).replace(/\/$/, "");
 const erc8004Ids = new Map<string, string>();
 
 function numericJobId(value: unknown): string | null {
@@ -25,17 +25,18 @@ function selectedAgent(body: any) {
 }
 
 function publicAgentUri(agentId: string) {
-  return `${baseUrl.replace(/\/$/, "")}/erc8004/${encodeURIComponent(agentId)}.json`;
+  return `${baseUrl}/erc8004/${encodeURIComponent(agentId)}.json`;
 }
 
 function registrationServices(agent: typeof agents[number]) {
   return [
-    { name: "web", endpoint: `${baseUrl.replace(/\/$/, "")}/` },
+    { name: "web", endpoint: `${baseUrl}/agent.json` },
     { name: "agentmarket", endpoint: baseUrl },
-    { name: "erc8183", endpoint: `${baseUrl.replace(/\/$/, "")}/execution-capabilities` },
-    { name: "requirements", endpoint: `${baseUrl.replace(/\/$/, "")}/requirements` },
-    { name: "quote", endpoint: `${baseUrl.replace(/\/$/, "")}/quote` },
-    { name: "execute", endpoint: `${baseUrl.replace(/\/$/, "")}/execute` },
+    { name: "erc8183", endpoint: `${baseUrl}/execution-capabilities` },
+    { name: "requirements", endpoint: `${baseUrl}/requirements` },
+    { name: "quote", endpoint: `${baseUrl}/quote` },
+    { name: "execute", endpoint: `${baseUrl}/execute` },
+    { name: "agent", endpoint: publicAgentUri(agent.id) },
   ];
 }
 
@@ -55,6 +56,13 @@ async function autoRegisterERC8004() {
     }
   }
 }
+
+app.get("/", (_req, res) => res.json({
+  ok: true,
+  service: "web2-ai-agents",
+  manifest: `${baseUrl}/agent.json`,
+  protocols: ["erc-8183", "erc-8004", "agentmarket"],
+}));
 
 app.get("/health", (_req, res) => res.json({ ok: true, service: "web2-ai-agents", erc8183: erc8183Metadata(), erc8004: erc8004Metadata(), agents: agents.map(a => ({ id: a.id, erc8004_agent_id: erc8004Ids.get(a.id) || null })) }));
 
