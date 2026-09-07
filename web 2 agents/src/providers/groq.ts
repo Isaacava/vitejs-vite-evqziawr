@@ -9,5 +9,7 @@ export async function generateWithGroq(system: string, prompt: string) {
   });
   if (!response.ok) throw new Error(`Groq HTTP ${response.status}: ${await response.text()}`);
   const data = await response.json() as any;
-  return String(data?.choices?.[0]?.message?.content || "").trim();
+  const text = String(data?.choices?.[0]?.message?.content || "").trim();
+  if (!text) throw new Error("Groq returned an empty completion");
+  return text;
 }
