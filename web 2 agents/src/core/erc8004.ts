@@ -4,6 +4,7 @@ import { bscTestnet } from "viem/chains";
 
 const IDENTITY_REGISTRY = (process.env.ERC8004_IDENTITY_REGISTRY || "0x8004A818BFB912233c491871b3d84c89A494BD9e") as Address;
 const RPC_URL = process.env.ERC8183_RPC_URL || process.env.BSC_TESTNET_RPC_URL || "https://bsc-testnet-rpc.publicnode.com";
+const MAX_LOG_RANGE = 50_000n;
 
 const ABI = [
   { type: "function", name: "register", stateMutability: "nonpayable", inputs: [{ name: "agentURI", type: "string" }], outputs: [{ name: "agentId", type: "uint256" }] },
@@ -30,16 +31,23 @@ function providerAccount() {
   return privateKeyToAccount(key);
 }
 
-export async function ensureAgent8004Registration(agentURI: string): Promise<Agent8004Registration> {
-  const owner = providerAccount();
+async function findRecentRegistration(owner: Address, agentURI: string) {
+  const latestBlock = await publicClient.getBlockNumber();
+  const fromBlock = latestBlock > MAX_LOG_RANGE - 1n ? latestBlock - (MAX_LOG_RANGE - 1n) : 0n;
   const existing = await publicClient.getLogs({
     address: IDENTITY_REGISTRY,
     event: ABI[1],
-    args: { owner: owner.address },
-    fromBlock: 0n,
-    toBlock: "latest",
+    args: { owner },
+    fromBlock,
+    toBlock: latestBlock,
   });
-  const match = existing.find((log) => log.args.agentURI === agentURI && log.args.agentId !== undefined);
+
+  return existing.find((log) => log.args.agentURI === agentURI && log.args.agentId !== undefined);
+}
+
+export async function ensureAgent8004Registration(agentURI: string): Promise<Agent8004Registration> {
+  const owner = providerAccount();
+  const match = await findRecentRegistration(owner.address, agentURI);
   if (match?.args.agentId !== undefined) {
     return { agent_id: String(match.args.agentId), agent_registry: `eip155:97:${IDENTITY_REGISTRY}`, agent_uri: agentURI, owner: owner.address, chain_id: 97 };
   }
