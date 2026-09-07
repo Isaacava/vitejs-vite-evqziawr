@@ -28,14 +28,41 @@ function publicAgentUri(agentId: string) {
   return `${baseUrl}/erc8004/${encodeURIComponent(agentId)}.json`;
 }
 
+function capabilitySchema(agent: typeof agents[number]) {
+  return {
+    version: 1,
+    inputs: agent.requiredFields.map(field => ({
+      name: field.name,
+      label: field.label,
+      type: field.type,
+      required: true,
+    })),
+  };
+}
+
+function operationInputSchema(agent: typeof agents[number]) {
+  const properties = Object.fromEntries(agent.requiredFields.map(field => [field.name, {
+    type: "string",
+    title: field.label,
+    ...(field.type === "email" ? { format: "email" } : {}),
+  }]));
+  return {
+    type: "object",
+    required: agent.requiredFields.map(field => field.name),
+    properties,
+  };
+}
+
 function registrationServices(agent: typeof agents[number]) {
+  const inputSchema = operationInputSchema(agent);
+  const schema = capabilitySchema(agent);
   return [
     { name: "web", endpoint: `${baseUrl}/agent.json` },
     { name: "agentmarket", endpoint: baseUrl },
     { name: "erc8183", endpoint: `${baseUrl}/execution-capabilities` },
-    { name: "requirements", endpoint: `${baseUrl}/requirements` },
-    { name: "quote", endpoint: `${baseUrl}/quote` },
-    { name: "execute", endpoint: `${baseUrl}/execute` },
+    { name: "requirements", endpoint: `${baseUrl}/requirements`, version: "1" },
+    { name: "quote", endpoint: `${baseUrl}/quote`, version: "1", metadata: { input_schema: inputSchema, capability_schema: schema } },
+    { name: "execute", endpoint: `${baseUrl}/execute`, version: "1", metadata: { input_schema: inputSchema, capability_schema: schema } },
     { name: "agent", endpoint: publicAgentUri(agent.id) },
   ];
 }
@@ -71,17 +98,42 @@ app.get("/agent.json", (_req, res) => res.json({
   name: process.env.AGENT_NAME || "AgentMarket Web2 AI Agents",
   version: process.env.AGENT_VERSION || "1.0.0",
   protocols: ["http", "erc-8183", "erc-8004", "agentmarket"],
-  capabilities: agents.map(agent => ({ id: agent.id, name: agent.name, description: agent.description, category: agent.category, erc8004_agent_id: erc8004Ids.get(agent.id) || null })),
+  capabilities: agents.map(agent => ({
+    id: agent.id,
+    name: agent.name,
+    description: agent.description,
+    category: agent.category,
+    erc8004_agent_id: erc8004Ids.get(agent.id) || null,
+    capability_schema: capabilitySchema(agent),
+    input_schema: operationInputSchema(agent),
+  })),
   endpoints: {
     health: { url: `${baseUrl}/health`, method: "GET" },
     requirements: { url: `${baseUrl}/requirements`, method: "POST" },
-    quote: { url: `${baseUrl}/quote`, method: "POST" },
-    decision: { url: `${baseUrl}/decision`, method: "POST" },
+    quote: {
+      url: `${baseUrl}/quote`,
+      method: "POST",
+      input_schema_by_agent: Object.fromEntries(agents.map(agent => [agent.id, operationInputSchema(agent)])),
+    },
+    decision: {
+      url: `${baseUrl}/decision`,
+      method: "POST",
+      input_schema_by_agent: Object.fromEntries(agents.map(agent => [agent.id, operationInputSchema(agent)])),
+    },
     execution_capabilities: { url: `${baseUrl}/execution-capabilities`, method: "GET" },
-    execute: { url: `${baseUrl}/execute`, method: "POST" },
+    execute: {
+      url: `${baseUrl}/execute`,
+      method: "POST",
+      input_schema_by_agent: Object.fromEntries(agents.map(agent => [agent.id, operationInputSchema(agent)])),
+    },
     result: { url: `${baseUrl}/result`, method: "POST" },
   },
-  hiring: { model: "AgentMarket-managed", funding: "ERC-8183", payment_unit: "contract-defined-erc20" },
+  hiring: {
+    model: "AgentMarket-managed",
+    funding: "ERC-8183",
+    payment_unit: "contract-defined-erc20",
+    input_schema_source: "capability_schema",
+  },
   execution: { protocol: "ERC-8183", role: "provider", delivery: "email-before-submit", job_identifier: "chain_job_id" },
   identity: { ...erc8004Metadata(), registrations: agents.map(agent => ({ agent_id: erc8004Ids.get(agent.id) || null, agent_registry: erc8004Metadata().registry_format, agent_uri: publicAgentUri(agent.id) })) },
   erc8183: erc8183Metadata(),
@@ -90,13 +142,26 @@ app.get("/agent.json", (_req, res) => res.json({
 app.get("/erc8004/:agentId.json", (req, res) => {
   const agent = agentMap.get(String(req.params.agentId || ""));
   if (!agent) return res.status(404).json({ error: "Unknown agent" });
-  return res.json(erc8004RegistrationDocument({ name: agent.name, description: agent.description, services: registrationServices(agent), agentId: erc8004Ids.get(agent.id) || null }));
+  return res.json(erc8004RegistrationDocument({
+    name: agent.name,
+    description: agent.description,
+    services: registrationServices(agent),
+    agentId: erc8004Ids.get(agent.id) || null,
+    capabilities: [{
+      id: agent.id,
+      name: agent.name,
+      description: agent.description,
+      category: agent.category,
+      capability_schema: capabilitySchema(agent),
+      input_schema: operationInputSchema(agent),
+    }],
+  }));
 });
 
 app.post("/requirements", (req, res) => {
   const agent = selectedAgent(req.body);
   if (!agent) return res.status(404).json({ error: "Unknown agent" });
-  return res.json({ ok: true, agent_id: agent.id, name: agent.name, requirements: agent.requiredFields });
+  return res.json({ ok: true, agent_id: agent.id, name: agent.name, version: 1, capability_schema: capabilitySchema(agent), requirements: agent.requiredFields });
 });
 
 app.get("/execution-capabilities", async (req, res) => {
@@ -115,14 +180,14 @@ app.post("/quote", (req, res) => {
   if (!agent) return res.status(404).json({ error: "Unknown agent" });
   const validation = validateInput(agent, req.body?.input || {});
   if (!validation.ok) return res.status(422).json({ error: "Missing required information", missing: validation.missing });
-  return res.json({ ok: true, agent_id: agent.id, price: { amount: 1, unit: "contract-defined-erc20", negotiable: true }, protocol: "erc-8183" });
+  return res.json({ ok: true, agent_id: agent.id, price: { amount: 1, unit: "contract-defined-erc20", negotiable: true }, protocol: "erc-8183", capability_schema: capabilitySchema(agent), input_schema: operationInputSchema(agent) });
 });
 
 app.post("/decision", (req, res) => {
   const agent = selectedAgent(req.body);
   if (!agent) return res.status(404).json({ error: "Unknown agent" });
   const validation = validateInput(agent, req.body?.input || {});
-  return res.json({ ok: validation.ok, agent_id: agent.id, missing: validation.missing, accepted: validation.ok, protocol: "erc-8183", note: validation.ok ? "Ready for ERC-8183 funding and execution" : "Collect required information before funding" });
+  return res.json({ ok: validation.ok, agent_id: agent.id, missing: validation.missing, accepted: validation.ok, protocol: "erc-8183", capability_schema: capabilitySchema(agent), input_schema: operationInputSchema(agent), note: validation.ok ? "Ready for ERC-8183 funding and execution" : "Collect required information before funding" });
 });
 
 app.post("/execute", async (req, res) => {
@@ -139,6 +204,7 @@ app.post("/execute", async (req, res) => {
     if (job.status !== 1) return res.status(409).json({ error: `ERC-8183 job must be Funded before execution; current status=${job.status}` });
 
     const result = await generateWithFallback({ system: agent.getSystemPrompt(), prompt: agent.buildPrompt(input) });
+    if (!result.text.trim()) return res.status(502).json({ error: "AI provider returned an empty deliverable" });
     const email = String(input.email);
     const filename = buildDeliverableFilename(agent);
     await sendDeliverableEmail({ to: email, subject: `${agent.name} deliverable`, filename, content: result.text, jobId });
