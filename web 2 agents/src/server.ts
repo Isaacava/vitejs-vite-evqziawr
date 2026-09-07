@@ -4,6 +4,7 @@ import cors from "cors";
 import { agents, agentMap } from "./agents/index.js";
 import { validateInput, buildDeliverableFilename } from "./core/agent.js";
 import { deliverableHash, erc8183Metadata, getJob, submitJob } from "./core/erc8183.js";
+import { ensureAgent8004Registration, erc8004Metadata, erc8004RegistrationDocument } from "./core/erc8004.js";
 import { generateWithFallback } from "./providers/index.js";
 import { sendDeliverableEmail } from "./email/mailer.js";
 
@@ -12,6 +13,7 @@ app.use(cors());
 app.use(express.json({ limit: "2mb" }));
 const port = Number(process.env.PORT || 8788);
 const baseUrl = process.env.BASE_URL || `http://localhost:${port}`;
+const erc8004Ids = new Map<string, string>();
 
 function numericJobId(value: unknown): string | null {
   const text = String(value ?? "").trim();
@@ -22,14 +24,46 @@ function selectedAgent(body: any) {
   return agentMap.get(String(body?.agent_id || ""));
 }
 
-app.get("/health", (_req, res) => res.json({ ok: true, service: "web2-ai-agents", erc8183: erc8183Metadata(), agents: agents.map(a => a.id) }));
+function publicAgentUri(agentId: string) {
+  return `${baseUrl.replace(/\/$/, "")}/erc8004/${encodeURIComponent(agentId)}.json`;
+}
+
+function registrationServices(agent: typeof agents[number]) {
+  return [
+    { name: "web", endpoint: `${baseUrl.replace(/\/$/, "")}/` },
+    { name: "agentmarket", endpoint: baseUrl },
+    { name: "erc8183", endpoint: `${baseUrl.replace(/\/$/, "")}/execution-capabilities` },
+    { name: "requirements", endpoint: `${baseUrl.replace(/\/$/, "")}/requirements` },
+    { name: "quote", endpoint: `${baseUrl.replace(/\/$/, "")}/quote` },
+    { name: "execute", endpoint: `${baseUrl.replace(/\/$/, "")}/execute` },
+  ];
+}
+
+async function autoRegisterERC8004() {
+  if (process.env.AUTO_REGISTER_ERC8004 === "false") return;
+  if (!/^https?:\/\//i.test(baseUrl) || baseUrl.includes("localhost")) {
+    console.warn("ERC-8004 auto-registration skipped: BASE_URL must be a public HTTP(S) URL");
+    return;
+  }
+  for (const agent of agents) {
+    try {
+      const registration = await ensureAgent8004Registration(publicAgentUri(agent.id));
+      erc8004Ids.set(agent.id, registration.agent_id);
+      console.log(`ERC8004_REGISTERED agent=${agent.id} agent_id=${registration.agent_id} registry=${registration.agent_registry}`);
+    } catch (error) {
+      console.error(`ERC8004_REGISTRATION_FAILED agent=${agent.id}`, error);
+    }
+  }
+}
+
+app.get("/health", (_req, res) => res.json({ ok: true, service: "web2-ai-agents", erc8183: erc8183Metadata(), erc8004: erc8004Metadata(), agents: agents.map(a => ({ id: a.id, erc8004_agent_id: erc8004Ids.get(a.id) || null })) }));
 
 app.get("/agent.json", (_req, res) => res.json({
   spec: "agent-provider/v1",
   name: process.env.AGENT_NAME || "AgentMarket Web2 AI Agents",
   version: process.env.AGENT_VERSION || "1.0.0",
-  protocols: ["http", "erc-8183", "agentmarket"],
-  capabilities: agents.map(agent => ({ id: agent.id, name: agent.name, description: agent.description, category: agent.category })),
+  protocols: ["http", "erc-8183", "erc-8004", "agentmarket"],
+  capabilities: agents.map(agent => ({ id: agent.id, name: agent.name, description: agent.description, category: agent.category, erc8004_agent_id: erc8004Ids.get(agent.id) || null })),
   endpoints: {
     health: { url: `${baseUrl}/health`, method: "GET" },
     requirements: { url: `${baseUrl}/requirements`, method: "POST" },
@@ -41,8 +75,15 @@ app.get("/agent.json", (_req, res) => res.json({
   },
   hiring: { model: "AgentMarket-managed", funding: "ERC-8183", payment_unit: "contract-defined-erc20" },
   execution: { protocol: "ERC-8183", role: "provider", delivery: "email-before-submit", job_identifier: "chain_job_id" },
+  identity: { ...erc8004Metadata(), registrations: agents.map(agent => ({ agent_id: erc8004Ids.get(agent.id) || null, agent_registry: erc8004Metadata().registry_format, agent_uri: publicAgentUri(agent.id) })) },
   erc8183: erc8183Metadata(),
 }));
+
+app.get("/erc8004/:agentId.json", (req, res) => {
+  const agent = agentMap.get(String(req.params.agentId || ""));
+  if (!agent) return res.status(404).json({ error: "Unknown agent" });
+  return res.json(erc8004RegistrationDocument({ name: agent.name, description: agent.description, services: registrationServices(agent), agentId: erc8004Ids.get(agent.id) || null }));
+});
 
 app.post("/requirements", (req, res) => {
   const agent = selectedAgent(req.body);
@@ -96,7 +137,7 @@ app.post("/execute", async (req, res) => {
 
     const deliverable = deliverableHash(result.text);
     const submission = await submitJob(jobId, deliverable);
-    return res.json({ ok: true, agent_id: agent.id, status: "submitted", protocol: "erc-8183", provider: result.provider, deliverable: { filename, emailed_to: email, hash: deliverable }, submission });
+    return res.json({ ok: true, agent_id: agent.id, erc8004_agent_id: erc8004Ids.get(agent.id) || null, status: "submitted", protocol: "erc-8183", provider: result.provider, deliverable: { filename, emailed_to: email, hash: deliverable }, submission });
   } catch (error) {
     return res.status(500).json({ error: error instanceof Error ? error.message : "Execution failed" });
   }
@@ -104,4 +145,7 @@ app.post("/execute", async (req, res) => {
 
 app.post("/result", (req, res) => res.json({ ok: true, protocol: "erc-8183", status: "submitted", chain_job_id: numericJobId(req.body?.chain_job_id || req.body?.job_id) }));
 
-app.listen(port, () => console.log(`Web2 ERC-8183 AI Agents listening on ${port}`));
+app.listen(port, () => {
+  console.log(`Web2 ERC-8183/ERC-8004 AI Agents listening on ${port}`);
+  void autoRegisterERC8004();
+});
