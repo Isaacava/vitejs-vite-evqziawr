@@ -9,5 +9,7 @@ export async function generateWithGemini(system: string, prompt: string) {
   });
   if (!response.ok) throw new Error(`Gemini HTTP ${response.status}: ${await response.text()}`);
   const data = await response.json() as any;
-  return String(data?.candidates?.[0]?.content?.parts?.map((p: any) => p?.text || "").join("") || "").trim();
+  const text = String(data?.candidates?.[0]?.content?.parts?.map((p: any) => p?.text || "").join("") || "").trim();
+  if (!text) throw new Error("Gemini returned an empty completion");
+  return text;
 }
