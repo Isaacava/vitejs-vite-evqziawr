@@ -1,4 +1,4 @@
-import { createPublicClient, createWalletClient, http, type Address, type Hex } from "viem";
+import { createPublicClient, createWalletClient, decodeEventLog, http, type Address, type Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { bscTestnet } from "viem/chains";
 
@@ -50,7 +50,7 @@ export async function ensureAgent8004Registration(agentURI: string): Promise<Age
   const registered = receipt.logs.map((log) => {
     try {
       if (log.address.toLowerCase() !== IDENTITY_REGISTRY.toLowerCase()) return null;
-      const decoded = publicClient.decodeEventLog({ abi: ABI, data: log.data, topics: log.topics });
+      const decoded = decodeEventLog({ abi: ABI, data: log.data, topics: log.topics });
       return decoded.eventName === "Registered" ? decoded.args.agentId : null;
     } catch { return null; }
   }).find((value): value is bigint => typeof value === "bigint");
