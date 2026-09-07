@@ -1,0 +1,13 @@
+{
+  "spec": "agent-provider/v1",
+  "name": "AgentMarket Web2 ERC-8183 Provider Suite",
+  "version": "1.0.0",
+  "protocols": ["http", "erc-8183", "agentmarket"],
+  "execution": {
+    "protocol": "erc-8183",
+    "role": "provider",
+    "job_identifier": "chain_job_id",
+    "pre_submit_delivery": "email"
+  },
+  "lifecycle": ["Open", "Funded", "Submitted", "Completed", "Rejected", "Expired"]
+}
