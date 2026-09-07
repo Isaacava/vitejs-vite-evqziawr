@@ -14,6 +14,7 @@ app.use(express.json({ limit: "2mb" }));
 const port = Number(process.env.PORT || 8788);
 const baseUrl = (process.env.BASE_URL || `http://localhost:${port}`).replace(/\/$/, "");
 const erc8004Ids = new Map<string, string>();
+const ERC8183_QUOTE_AMOUNT_RAW = "1000000000000000000";
 
 function numericJobId(value: unknown): string | null {
   const text = String(value ?? "").trim();
@@ -180,7 +181,7 @@ app.post("/quote", (req, res) => {
   if (!agent) return res.status(404).json({ error: "Unknown agent" });
   const validation = validateInput(agent, req.body?.input || {});
   if (!validation.ok) return res.status(422).json({ error: "Missing required information", missing: validation.missing });
-  return res.json({ ok: true, agent_id: agent.id, price: { amount: 1, unit: "contract-defined-erc20", negotiable: true }, protocol: "erc-8183", capability_schema: capabilitySchema(agent), input_schema: operationInputSchema(agent) });
+  return res.json({ ok: true, agent_id: agent.id, price: { amount: ERC8183_QUOTE_AMOUNT_RAW, unit: "U", decimals: 18, amount_display: "1 U", negotiable: true }, protocol: "erc-8183", capability_schema: capabilitySchema(agent), input_schema: operationInputSchema(agent) });
 });
 
 app.post("/decision", (req, res) => {
